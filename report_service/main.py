@@ -5,22 +5,33 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.middleware.cors import CORSMiddleware
+
 from pydantic import BaseModel
 from jose import jwt, JWTError
 import clickhouse_connect
 
 # ── Конфигурация ──────────────────────────────────────────────
-KEYCLOAK_URL = os.getenv("KC_URL", "http://localhost:8080")
+KEYCLOAK_URL = os.getenv("KC_URL", "http://keycloak:8080")
 REALM_NAME = os.getenv("KC_REALM", "reports-realm")
 CH_HOST = os.getenv("CH_HOST", "clickhouse")
 CH_PORT = int(os.getenv("CH_PORT", "8123"))
-CH_USER = os.getenv("CH_USER", "default")
-CH_PASSWORD = os.getenv("CH_PASSWORD", "")
+CH_USER = os.getenv("CH_USER", "default1")
+CH_PASSWORD = os.getenv("CH_PASSWORD", "123")
 CH_DB = os.getenv("CH_DB", "reports")
 
 WELL_KNOWN_CONFIG_URL = f"{KEYCLOAK_URL}/realms/{REALM_NAME}/.well-known/openid-configuration"
 
 app = FastAPI(title="Report Service", version="2.0")
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Подключение к ClickHouse ─────────────────────────────────
 def get_ch_client():
@@ -104,10 +115,9 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     ch = get_ch_client()
     
     # Ищем соответствие email -> client_id
-    # Сначала пробуем таблицу users_auth (там логины)
     result = ch.query(
         """
-        SELECT client_id, client_name, client_email 
+        SELECT client_id, client_name, email 
         FROM users_auth 
         WHERE email = {email:String}
         LIMIT 1
@@ -115,29 +125,17 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         parameters={"email": email},
     )
     
-    # Если не нашли, пробуем таблицу отчетов (fallback, если пользователи создаются там)
-    if not result.result_rows:
-        result = ch.query(
-            """
-            SELECT client_id, client_name, client_email 
-            FROM client_telemetry_report 
-            WHERE client_email = {email:String}
-            LIMIT 1
-            """,
-            parameters={"email": email},
-        )
-
     if not result.result_rows:
         raise HTTPException(
             status_code=403, 
             detail=f"No report access configured for user: {email}. Check if email exists in ClickHouse."
         )
     
-    row = result.result_rows
+    row = result.result_rows[0]
     return {
-        "client_id": row,
-        "client_name": row,
-        "client_email": row
+        "client_id": row[0],
+        "client_name": row[1],
+        "client_email": row[2]
     }
 
 # ── ЕДИНСТВЕННЫЙ Эндпоинт /reports ──────────────────────────
@@ -159,8 +157,8 @@ def get_report(user: dict = Depends(get_current_user)):
             event_type,
             event_count,
             total_value,
-            toString(first_event_date) AS first_event_date,
-            toString(last_event_date)  AS last_event_date
+            '' AS first_event_date,
+            '' AS last_event_date
         FROM client_telemetry_report
         WHERE client_id = {cid:UInt32}
         ORDER BY event_type
@@ -170,11 +168,11 @@ def get_report(user: dict = Depends(get_current_user)):
 
     events = [
         EventRow(
-            event_type=r,
-            event_count=r,
-            total_value=float(r),
-            first_event_date=r,
-            last_event_date=r,
+            event_type=r[0],
+            event_count=r[1],
+            total_value=float(r[2]),
+            first_event_date=r[3],
+            last_event_date=r[4],
         )
         for r in rows.result_rows
     ]

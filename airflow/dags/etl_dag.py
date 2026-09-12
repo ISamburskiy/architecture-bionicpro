@@ -53,19 +53,14 @@ def transform_and_load(**context):
         if key not in agg:
             agg[key] = {
                 "event_count": 0,
-                "total_value": 0,
-                "first_event": None,
-                "last_event": None
+                "total_value": 0
             }
         agg[key]["event_count"] += 1
         agg[key]["total_value"] += value
 
-        # Для простоты first/last можно взять из телеметрии, здесь заглушка
-        agg[key]["first_event"] = agg[key]["first_event"] or "2024-01-01 00:00:00"
-        agg[key]["last_event"] = "2024-01-01 23:59:59"
 
     # Подключаемся к ClickHouse
-    client = clickhouse_connect.get_client(host="clickhouse", port=8123, database="reports")
+    client = clickhouse_connect.get_client(host="clickhouse", port=8123, database="reports", username="default1", password="123")
 
     # TRUNCATE + INSERT для простоты
     client.query("TRUNCATE TABLE reports.client_telemetry_report")
@@ -78,13 +73,20 @@ def transform_and_load(**context):
             client_map.get(cid, {}).get("email", "Unknown"),
             etype,
             data["event_count"],
-            data["total_value"],
-            data["first_event"],
-            data["last_event"]
+            data["total_value"]
         ))
 
     if batch:
-        client.insert_rows("client_telemetry_report", batch)
+        client.insert("client_telemetry_report", batch, column_names=
+            [
+            "client_id", 
+            "client_name",
+            "client_email",
+            "event_type",
+            "event_count",
+            "total_value"
+            ]
+            )
 
 with DAG(
     dag_id="etl_crm_telemetry",

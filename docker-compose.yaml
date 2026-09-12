@@ -3,6 +3,7 @@ version: '3.8'
 services:
   keycloak_db:
     image: postgres:14
+    container_name: keykloak_db
     environment:
       POSTGRES_DB: keycloak_db
       POSTGRES_USER: keycloak_user
@@ -13,6 +14,7 @@ services:
       - "5433:5432"
   keycloak:
     image: quay.io/keycloak/keycloak:21.1
+    container_name: keykloak
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
@@ -84,7 +86,7 @@ services:
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
     environment:
-      CLICKHOUSE_USERNAME: ${CLICKHOUSE_USER}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8123/ping"]
@@ -106,13 +108,30 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+  airflow-init:
+    build:
+      context: ./airflow
+      dockerfile: DockerFile
+    container_name: airflow-init
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+    entrypoint: /bin/bash
+    command: -c "airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com"
 
   airflow-webserver:
-    image: apache/airflow:2.7.3
+    build:
+      context: ./airflow
+      dockerfile: DockerFile
     container_name: airflow-webserver
     depends_on:
       airflow-db:
         condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
@@ -125,7 +144,7 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
     ports:
-      - "8080:8080"
+      - "8081:8080"
     command: webserver
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
@@ -134,7 +153,9 @@ services:
       retries: 5
 
   airflow-scheduler:
-    image: apache/airflow:2.7.3
+    build:
+      context: ./airflow
+      dockerfile: DockerFile
     container_name: airflow-scheduler
     depends_on:
       airflow-db:
@@ -159,14 +180,14 @@ services:
       - "8000:8000"
     depends_on:
       clickhouse:
-        condition: service_healthy
+        condition: service_started
       keycloak:
-        condition: service_healthy
+        condition: service_started
     environment:
       CH_HOST: clickhouse
       CH_PORT: "8123"
-      CH_USER: default
-      CH_PASSWORD: ""
+      CH_USER: default1
+      CH_PASSWORD: "123"
       CH_DB: reports
       KC_URL: http://keycloak:8080
       KC_REALM: reports-realm
