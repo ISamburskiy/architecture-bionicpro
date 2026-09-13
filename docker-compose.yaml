@@ -176,6 +176,7 @@ services:
       context: ./report_service
       dockerfile: DockerFile
     container_name: report_service
+    restart: unless-stopped
     ports:
       - "8000:8000"
     depends_on:
